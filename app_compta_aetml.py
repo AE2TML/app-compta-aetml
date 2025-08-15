@@ -280,7 +280,8 @@ class App(ctk.CTk):
         version_url = "https://raw.githubusercontent.com/AE2TML/app-compta-aetml/main/version.txt"
         
         try:
-            response = requests.get(version_url, timeout=5)
+            # Augmentation du timeout à 15 secondes
+            response = requests.get(version_url, timeout=15)
             if response.status_code == 200:
                 remote_version_str = response.text.strip()
                 local_version = parse_version(APP_VERSION)
@@ -1121,4 +1122,4 @@ if __name__ == "__main__":
     app = App()
     app.mainloop()
 
-# hello world 2
+# hello caca
