@@ -12,7 +12,7 @@ import requests
 from packaging.version import parse as parse_version
 
 # --- CONFIGURATION ---
-APP_VERSION = "1.0.7"  # Version actuelle de l'application
+APP_VERSION = "1.0.9"  # Version actuelle de l'application
 DB_FILE = "aetml_compta.db"
 APP_TITLE = "AETML - Gestion Comptable"
 ATTACHMENT_DIR = "attachments"
@@ -354,7 +354,7 @@ class App(ctk.CTk):
             messagebox.showerror("Erreur", f"Une erreur inattendue est survenue : {e}")
 
     def create_sidebar_buttons(self):
-        self.dashboard_button = ctk.CTkButton(self.sidebar_frame, text="Tableau de Bord", command=self.dashboard_frame_event)
+        self.dashboard_button = ctk.CTkButton(self.sidebar_frame, text="Tableau de Bord", command=self.dashboard_frame_event, text_color="green")
         self.dashboard_button.grid(row=1, column=0, padx=20, pady=10)
         self.journal_poste_button = ctk.CTkButton(self.sidebar_frame, text="Journal de Poste", command=self.journal_poste_frame_event)
         self.journal_poste_button.grid(row=2, column=0, padx=20, pady=10)
@@ -1194,4 +1194,3 @@ if __name__ == "__main__":
     app.mainloop()
 
 # Bon ca fonctionne 
-
