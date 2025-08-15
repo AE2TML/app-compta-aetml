@@ -263,7 +263,6 @@ class App(ctk.CTk):
 
     def cleanup_old_version(self):
         """Supprime l'ancienne version du script (_old.py) si elle existe."""
-        # Tente de trouver le nom du script actuel pour construire l'ancien nom
         try:
             current_script_name = os.path.basename(sys.argv[0])
             base_name, ext = os.path.splitext(current_script_name)
@@ -304,7 +303,6 @@ class App(ctk.CTk):
             response = requests.get(release_url, stream=True)
             response.raise_for_status()
             
-            # Utilise des noms de fichiers clairs pour le processus
             current_script_name = os.path.basename(sys.argv[0])
             base_name, ext = os.path.splitext(current_script_name)
             new_script_path = f"{base_name}_new{ext}"
@@ -315,16 +313,15 @@ class App(ctk.CTk):
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # Crée le script batch pour remplacer l'ancien fichier de manière robuste
             with open(updater_script_path, "w") as f:
                 f.write(f"@echo off\n")
                 f.write(f"echo Mise a jour de l'application...\n")
-                f.write(f"timeout /t 3 /nobreak > nul\n") # Donne 3s à l'app pour se fermer
-                f.write(f"rename \"{current_script_name}\" \"{old_script_path}\"\n") # Renomme l'ancien script
-                f.write(f"rename \"{new_script_path}\" \"{current_script_name}\"\n") # Renomme le nouveau script
+                f.write(f"timeout /t 3 /nobreak > nul\n")
+                f.write(f"rename \"{current_script_name}\" \"{old_script_path}\"\n")
+                f.write(f"rename \"{new_script_path}\" \"{current_script_name}\"\n")
                 f.write(f"echo Lancement de la nouvelle version...\n")
-                f.write(f"start python \"{current_script_name}\"\n") # Démarre la nouvelle version
-                f.write(f"del \"%~f0\"\n") # Le script se supprime lui-même
+                f.write(f"start python \"{current_script_name}\"\n")
+                f.write(f"del \"%~f0\"\n")
 
             os.startfile(updater_script_path)
             self.destroy()
@@ -462,6 +459,10 @@ class App(ctk.CTk):
         self.end_date_entry = ctk.CTkEntry(form_frame, placeholder_text="Date de fin")
         self.end_date_entry.pack(side="left", padx=2, expand=True)
         ctk.CTkButton(form_frame, text="Ajouter Exercice", command=self.add_year).pack(side="left", padx=10)
+        
+        # Bouton Supprimer Exercice
+        delete_button = ctk.CTkButton(form_frame, text="Supprimer Exercice", command=self.delete_year, fg_color="#D32F2F", hover_color="#B71C1C")
+        delete_button.pack(side="left", padx=10)
 
         self.years_tree = ttk.Treeview(self.years_frame, columns=("ID", "Nom", "Début", "Fin"), show="headings")
         self.years_tree.heading("ID", text="ID"); self.years_tree.column("ID", width=50)
@@ -950,6 +951,54 @@ class App(ctk.CTk):
         except sqlite3.IntegrityError:
             messagebox.showerror("Erreur", "Un exercice avec ce nom existe déjà.")
 
+    def delete_year(self):
+        if not self.years_tree.focus():
+            messagebox.showwarning("Sélection requise", "Veuillez sélectionner un exercice à supprimer.")
+            return
+
+        selected_item = self.years_tree.item(self.years_tree.focus())
+        year_id = selected_item['values'][0]
+        year_name = selected_item['values'][1]
+
+        if not messagebox.askyesno("Confirmation de suppression", 
+                                   f"Êtes-vous sûr de vouloir supprimer l'exercice '{year_name}' ?\n"
+                                   "ATTENTION : Toutes les écritures, budgets et pièces jointes associés seront définitivement supprimés."):
+            return
+
+        try:
+            cursor = self.conn.cursor()
+            
+            # 1. Supprimer les pièces jointes associées
+            attachment_folder = os.path.join(ATTACHMENT_DIR, str(year_id))
+            if os.path.exists(attachment_folder):
+                shutil.rmtree(attachment_folder)
+                print(f"Dossier de pièces jointes '{attachment_folder}' supprimé.")
+
+            # 2. Supprimer les budgets
+            cursor.execute("DELETE FROM budgets WHERE year_id = ?", (year_id,))
+            
+            # 3. Supprimer les détails de caisse (via la suppression des écritures)
+            cursor.execute("DELETE FROM cash_details WHERE entry_id IN (SELECT id FROM entries WHERE year_id = ?)", (year_id,))
+
+            # 4. Supprimer les écritures
+            cursor.execute("DELETE FROM entries WHERE year_id = ?", (year_id,))
+            
+            # 5. Supprimer l'exercice lui-même
+            cursor.execute("DELETE FROM accounting_years WHERE id = ?", (year_id,))
+            
+            self.conn.commit()
+            
+            messagebox.showinfo("Succès", f"L'exercice '{year_name}' et toutes ses données ont été supprimés.")
+            
+            # Rafraîchir toutes les vues
+            self.update_year_selector()
+            self.refresh_years_view()
+
+        except Exception as e:
+            self.conn.rollback()
+            messagebox.showerror("Erreur de suppression", f"Une erreur est survenue : {e}")
+
+
     def refresh_years_view(self):
         for item in self.years_tree.get_children(): self.years_tree.delete(item)
         cursor = self.conn.cursor()
@@ -1122,4 +1171,4 @@ if __name__ == "__main__":
     app = App()
     app.mainloop()
 
-# Bon ca fonctionne 
+# Bon ca fonctionne 
