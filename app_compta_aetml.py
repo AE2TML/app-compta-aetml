@@ -304,14 +304,18 @@ class App(ctk.CTk):
 
     def apply_update(self):
         """Télécharge la nouvelle version et lance le script de mise à jour."""
-        release_url = "https://github.com/AE2TML/app-compta-aetml/releases/latest/download/app_compta_aetml.py"
+        # Pour un .exe, le nom du fichier sur GitHub doit correspondre
+        is_frozen = getattr(sys, 'frozen', False)
+        if is_frozen:
+             release_url = "https://github.com/AE2TML/app-compta-aetml/releases/latest/download/app_compta_aetml.exe"
+        else:
+             release_url = "https://github.com/AE2TML/app-compta-aetml/releases/latest/download/app_compta_aetml.py"
         
         try:
             response = requests.get(release_url, stream=True)
             response.raise_for_status()
             
-            # Détermine les chemins corrects que l'app soit un script ou un .exe
-            if getattr(sys, 'frozen', False):
+            if is_frozen:
                 application_path = os.path.dirname(sys.executable)
                 current_executable_name = os.path.basename(sys.executable)
             else:
@@ -330,7 +334,6 @@ class App(ctk.CTk):
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            # Crée le script batch pour remplacer l'ancien fichier de manière robuste
             with open(updater_script_path, "w") as f:
                 f.write(f"@echo off\n")
                 f.write(f"echo Mise a jour de l'application...\n")
