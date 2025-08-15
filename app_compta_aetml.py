@@ -12,7 +12,7 @@ import requests
 from packaging.version import parse as parse_version
 
 # --- CONFIGURATION ---
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 DB_FILE = "aetml_compta.db"
 APP_TITLE = "AETML - Gestion Comptable"
 ATTACHMENT_DIR = "attachments"
@@ -1103,3 +1103,4 @@ if __name__ == "__main__":
     app.mainloop()
 
 # hello world 3
+#le caca
