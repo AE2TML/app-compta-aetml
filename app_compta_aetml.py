@@ -262,11 +262,18 @@ class App(ctk.CTk):
         self.after(2000, self.check_for_updates)
 
     def cleanup_old_version(self):
-        """Supprime l'ancienne version du script (_old.py) si elle existe."""
+        """Supprime l'ancienne version du script (_old.py ou _old.exe) si elle existe."""
         try:
-            current_script_name = os.path.basename(sys.argv[0])
-            base_name, ext = os.path.splitext(current_script_name)
-            old_script_path = f"{base_name}_old{ext}"
+            # Détermine le chemin de base, que l'app soit un script ou un .exe
+            if getattr(sys, 'frozen', False):
+                application_path = os.path.dirname(sys.executable)
+                current_executable_name = os.path.basename(sys.executable)
+            else:
+                application_path = os.path.dirname(os.path.abspath(__file__))
+                current_executable_name = os.path.basename(__file__)
+            
+            base_name, ext = os.path.splitext(current_executable_name)
+            old_script_path = os.path.join(application_path, f"{base_name}_old{ext}")
             
             if os.path.exists(old_script_path):
                 os.remove(old_script_path)
@@ -303,24 +310,36 @@ class App(ctk.CTk):
             response = requests.get(release_url, stream=True)
             response.raise_for_status()
             
-            current_script_name = os.path.basename(sys.argv[0])
-            base_name, ext = os.path.splitext(current_script_name)
-            new_script_path = f"{base_name}_new{ext}"
-            old_script_path = f"{base_name}_old{ext}"
-            updater_script_path = "updater.bat"
+            # Détermine les chemins corrects que l'app soit un script ou un .exe
+            if getattr(sys, 'frozen', False):
+                application_path = os.path.dirname(sys.executable)
+                current_executable_name = os.path.basename(sys.executable)
+            else:
+                application_path = os.path.dirname(os.path.abspath(__file__))
+                current_executable_name = os.path.basename(__file__)
 
-            with open(new_script_path, 'wb') as f:
+            base_name, ext = os.path.splitext(current_executable_name)
+            
+            new_executable_path = os.path.join(application_path, f"{base_name}_new{ext}")
+            old_executable_path = os.path.join(application_path, f"{base_name}_old{ext}")
+            current_executable_path = os.path.join(application_path, current_executable_name)
+            updater_script_path = os.path.join(application_path, "updater.bat")
+
+
+            with open(new_executable_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
+            # Crée le script batch pour remplacer l'ancien fichier de manière robuste
             with open(updater_script_path, "w") as f:
                 f.write(f"@echo off\n")
                 f.write(f"echo Mise a jour de l'application...\n")
                 f.write(f"timeout /t 3 /nobreak > nul\n")
-                f.write(f"rename \"{current_script_name}\" \"{old_script_path}\"\n")
-                f.write(f"rename \"{new_script_path}\" \"{current_script_name}\"\n")
+                f.write(f"if exist \"{old_executable_path}\" del \"{old_executable_path}\"\n")
+                f.write(f"rename \"{current_executable_path}\" \"{old_executable_path}\"\n")
+                f.write(f"rename \"{new_executable_path}\" \"{current_executable_path}\"\n")
                 f.write(f"echo Lancement de la nouvelle version...\n")
-                f.write(f"start python \"{current_script_name}\"\n")
+                f.write(f"start \"\" \"{current_executable_path}\"\n")
                 f.write(f"del \"%~f0\"\n")
 
             os.startfile(updater_script_path)
@@ -1172,3 +1191,16 @@ if __name__ == "__main__":
     app.mainloop()
 
 # Bon ca fonctionne 
+la mise a jout ne fonctionne pas
+" code between  and  in the most up-to-date Canvas "Application Comptable AETML avec Mise à Jour" document above and am asking a query about/based on this code below.
+Instructions to follow:
+  * Don't output/edit the document if the query is Direct/Simple. For example, if the query asks for a simple explanation, output a direct answer.
+  * Make sure to **edit** the document if the query shows the intent of editing the document, in which case output the entire edited document, **not just that section or the edits**.
+    * Don't output the same document/empty document and say that you have edited it.
+    * Don't change unrelated code in the document.
+  * Don't output  and  in your final response.
+  * Any references like "this" or "selected code" refers to the code between  and  tags.
+  * Just acknowledge my request in the introduction.
+  * Make sure to refer to the document as "Canvas" in your response.
+
+je voudrais que tu me fasse un bouton qui permet de suprimer les exerc
