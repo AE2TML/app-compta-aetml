@@ -12,7 +12,7 @@ import requests
 from packaging.version import parse as parse_version
 
 # --- CONFIGURATION ---
-APP_VERSION = "1.0.4"
+APP_VERSION = "1.0.3"  # Version actuelle de l'application
 DB_FILE = "aetml_compta.db"
 APP_TITLE = "AETML - Gestion Comptable"
 ATTACHMENT_DIR = "attachments"
@@ -210,6 +210,10 @@ def generate_pdf(report_type, year_name, **kwargs):
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        
+        # Exécute le nettoyage de l'ancienne version au tout début
+        self.cleanup_old_version()
+        
         self.title(f"{APP_TITLE} - v{APP_VERSION}")
         self.geometry("1200x750")
 
@@ -257,6 +261,20 @@ class App(ctk.CTk):
         # Lance la vérification des mises à jour 2 secondes après le démarrage
         self.after(2000, self.check_for_updates)
 
+    def cleanup_old_version(self):
+        """Supprime l'ancienne version du script (_old.py) si elle existe."""
+        # Tente de trouver le nom du script actuel pour construire l'ancien nom
+        try:
+            current_script_name = os.path.basename(sys.argv[0])
+            base_name, ext = os.path.splitext(current_script_name)
+            old_script_path = f"{base_name}_old{ext}"
+            
+            if os.path.exists(old_script_path):
+                os.remove(old_script_path)
+                print(f"Ancienne version '{old_script_path}' supprimée avec succès.")
+        except Exception as e:
+            print(f"Impossible de supprimer l'ancienne version : {e}")
+
     def check_for_updates(self):
         """Vérifie sur GitHub si une nouvelle version est disponible."""
         version_url = "https://raw.githubusercontent.com/AE2TML/app-compta-aetml/main/version.txt"
@@ -285,23 +303,27 @@ class App(ctk.CTk):
             response = requests.get(release_url, stream=True)
             response.raise_for_status()
             
-            new_script_path = "app_compta_aetml_new.py"
+            # Utilise des noms de fichiers clairs pour le processus
+            current_script_name = os.path.basename(sys.argv[0])
+            base_name, ext = os.path.splitext(current_script_name)
+            new_script_path = f"{base_name}_new{ext}"
+            old_script_path = f"{base_name}_old{ext}"
+            updater_script_path = "updater.bat"
+
             with open(new_script_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     f.write(chunk)
 
-            updater_script_path = "updater.bat"
-            current_script_name = os.path.basename(sys.argv[0])
-
+            # Crée le script batch pour remplacer l'ancien fichier de manière robuste
             with open(updater_script_path, "w") as f:
                 f.write(f"@echo off\n")
                 f.write(f"echo Mise a jour de l'application...\n")
-                f.write(f"timeout /t 2 /nobreak > nul\n")
-                f.write(f"del \"{current_script_name}\"\n")
-                f.write(f"rename \"{new_script_path}\" \"{current_script_name}\"\n")
+                f.write(f"timeout /t 3 /nobreak > nul\n") # Donne 3s à l'app pour se fermer
+                f.write(f"rename \"{current_script_name}\" \"{old_script_path}\"\n") # Renomme l'ancien script
+                f.write(f"rename \"{new_script_path}\" \"{current_script_name}\"\n") # Renomme le nouveau script
                 f.write(f"echo Lancement de la nouvelle version...\n")
-                f.write(f"start python \"{current_script_name}\"\n")
-                f.write(f"del \"{updater_script_path}\"\n")
+                f.write(f"start python \"{current_script_name}\"\n") # Démarre la nouvelle version
+                f.write(f"del \"%~f0\"\n") # Le script se supprime lui-même
 
             os.startfile(updater_script_path)
             self.destroy()
@@ -310,9 +332,6 @@ class App(ctk.CTk):
             messagebox.showerror("Erreur de téléchargement", f"Impossible de télécharger la mise à jour : {e}")
         except Exception as e:
             messagebox.showerror("Erreur", f"Une erreur inattendue est survenue : {e}")
-
-    # ... Le reste de vos méthodes de la classe App ...
-    # (create_sidebar_buttons, setup_topbar, etc. restent identiques)
 
     def create_sidebar_buttons(self):
         self.dashboard_button = ctk.CTkButton(self.sidebar_frame, text="Tableau de Bord", command=self.dashboard_frame_event)
@@ -1102,5 +1121,4 @@ if __name__ == "__main__":
     app = App()
     app.mainloop()
 
-# hello world 3
-#le caca
+# hello world 2
