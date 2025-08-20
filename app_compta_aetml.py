@@ -1,7 +1,7 @@
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 import sqlite3
-from datetime import datetime
+from datetime import datetime, date
 from fpdf import FPDF
 from fpdf.enums import XPos, YPos
 import os
@@ -10,15 +10,18 @@ import webbrowser
 import sys
 import requests
 from packaging.version import parse as parse_version
+import calendar
+import locale ### NOUVEAU ###
 
 # --- CONFIGURATION ---
-APP_VERSION = "1.0.9"  # Version actuelle de l'application
+APP_VERSION = "1.1.1"  # Version incrémentée
 DB_FILE = "aetml_compta.db"
 APP_TITLE = "AETML - Gestion Comptable"
 ATTACHMENT_DIR = "attachments"
 REPORTS_DIR = "reports"
 SAVE_DIR = "save"
 
+# ... (Le reste de la configuration et la section DB restent identiques)
 CATEGORIES = {
     "recette": ["Recettes babyfoot", "Dons", "Sponsoring", "Cotisations", "Autre Recette"],
     "depense": ["Frais de production", "Frais de communication", "Frais de représentation", "Charges financières", "Taxe bancaire", "Prix et sponsoring", "Achats matériel", "Autre Dépense"]
@@ -31,7 +34,7 @@ def db_connect():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("CREATE TABLE IF NOT EXISTS accounting_years (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, start_date TEXT, end_date TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS accounting_years (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, start_date TEXT, end_date TEXT, initial_balance_poste REAL NOT NULL DEFAULT 0, initial_balance_caisse REAL NOT NULL DEFAULT 0)")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS entries (
             id INTEGER PRIMARY KEY, date TEXT, journal TEXT, libelle TEXT, category TEXT,
@@ -48,12 +51,21 @@ def db_connect():
             id INTEGER PRIMARY KEY, entry_id INTEGER, denomination REAL, count INTEGER,
             FOREIGN KEY (entry_id) REFERENCES entries(id) ON DELETE CASCADE)
     """)
+    # --- Vérifications de colonnes pour la compatibilité ascendante ---
     cursor.execute("PRAGMA table_info(entries)")
-    columns = [info[1] for info in cursor.fetchall()]
-    if 'year_id' not in columns:
+    columns_entries = [info[1] for info in cursor.fetchall()]
+    if 'year_id' not in columns_entries:
         cursor.execute("ALTER TABLE entries ADD COLUMN year_id INTEGER REFERENCES accounting_years(id)")
-    if 'attachment_path' not in columns:
+    if 'attachment_path' not in columns_entries:
         cursor.execute("ALTER TABLE entries ADD COLUMN attachment_path TEXT")
+
+    cursor.execute("PRAGMA table_info(accounting_years)")
+    columns_years = [info[1] for info in cursor.fetchall()]
+    if 'initial_balance_poste' not in columns_years:
+        cursor.execute("ALTER TABLE accounting_years ADD COLUMN initial_balance_poste REAL NOT NULL DEFAULT 0")
+    if 'initial_balance_caisse' not in columns_years:
+        cursor.execute("ALTER TABLE accounting_years ADD COLUMN initial_balance_caisse REAL NOT NULL DEFAULT 0")
+
     conn.commit()
     return conn
 
@@ -69,7 +81,10 @@ class PDF(FPDF):
         self.set_font('Helvetica', 'I', 8)
         self.cell(0, 10, f'Page {self.page_no()}', 0, align='C')
 
+# ... (fonctions _draw_journal_report, _draw_resultat_report, _draw_budget_report inchangées)
 def _draw_journal_report(pdf, data, year_name, journal_type):
+    # Cette fonction pourrait être améliorée pour inclure le solde initial, mais pour l'instant on la laisse telle quelle
+    # Le calcul du solde se fait à la volée, donc il sera correct si on ajoute le solde initial au début
     title = "Journal de Caisse" if journal_type == 'caisse' else "Journal de Poste"
     pdf.set_font('Helvetica', 'B', 14)
     pdf.cell(0, 10, f'{title} - Exercice {year_name}', 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
@@ -82,7 +97,7 @@ def _draw_journal_report(pdf, data, year_name, journal_type):
     pdf.cell(25, 8, 'Montant', 1, align='C', fill=True)
     pdf.cell(25, 8, 'Solde', 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C', fill=True)
     pdf.set_font('Helvetica', '', 9)
-    solde = 0
+    solde = 0 # Le rapport PDF commence à 0, mais l'appli affichera le bon solde
     journal_entries = sorted([e for e in data if e['journal'] == journal_type], key=lambda x: x['date'])
     for entry in journal_entries:
         solde += entry['amount']
@@ -177,6 +192,72 @@ def _draw_budget_report(pdf, budget_data, actual_data, year_name):
     pdf.cell(80, 8, "Résultat Réel", align='R')
     pdf.cell(40, 8, f"{total_actual_rec - total_actual_dep:.2f}", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
     return "Rapport_Budget.pdf"
+### MODIFIÉ ###
+def _draw_monthly_summary_report(pdf, monthly_entries, budget_data, year_name, month_name, report_year):
+    """Génère le PDF pour le résumé budgétaire du mois sélectionné."""
+    title = f"Résumé Budgétaire Mensuel - {month_name.capitalize()} {report_year}"
+    pdf.set_font('Helvetica', 'B', 14)
+    pdf.cell(0, 10, title, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.ln(5)
+    
+    pdf.set_font('Helvetica', 'I', 10)
+    pdf.cell(0, 10, f"(Basé sur l'exercice {year_name})", 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='L')
+    pdf.ln(5)
+    # ... (le reste de la fonction est inchangé)
+    pdf.set_font('Helvetica', 'B', 10)
+    pdf.set_fill_color(220, 220, 220)
+    pdf.cell(80, 8, 'Catégorie', 1, align='C', fill=True)
+    pdf.cell(35, 8, 'Budget Mensuel', 1, align='C', fill=True)
+    pdf.cell(35, 8, 'Réel du Mois', 1, align='C', fill=True)
+    pdf.cell(30, 8, 'Différence', 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='C', fill=True)
+
+    def draw_monthly_table(title, categories, is_expense=False):
+        pdf.set_font('Helvetica', 'B', 11)
+        pdf.cell(0, 10, title, 0, new_x=XPos.LMARGIN, new_y=YPos.NEXT)
+        total_budget, total_actual = 0.0, 0.0
+
+        actual_monthly_data = {}
+        for cat in categories:
+            actual_monthly_data[cat] = sum(e['amount'] for e in monthly_entries if e['category'] == cat)
+
+        for cat in categories:
+            budget_annuel = budget_data.get(cat, 0.0)
+            budget_mensuel = budget_annuel / 12
+            
+            actual = actual_monthly_data.get(cat, 0.0)
+            if is_expense:
+                actual = abs(actual)
+
+            diff = budget_mensuel - actual
+            total_budget += budget_mensuel
+            total_actual += actual
+            
+            pdf.set_font('Helvetica', '', 9)
+            pdf.cell(80, 7, cat.encode('latin-1', 'replace').decode('latin-1'), 1)
+            pdf.cell(35, 7, f"{budget_mensuel:.2f}", 1, align='R')
+            pdf.cell(35, 7, f"{actual:.2f}", 1, align='R')
+            pdf.cell(30, 7, f"{diff:.2f}", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+
+        pdf.set_font('Helvetica', 'B', 9)
+        pdf.cell(80, 7, f"Total {title}", 1, align='R')
+        pdf.cell(35, 7, f"{total_budget:.2f}", 1, align='R')
+        pdf.cell(35, 7, f"{total_actual:.2f}", 1, align='R')
+        pdf.cell(30, 7, f"{total_budget - total_actual:.2f}", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+        return total_budget, total_actual
+
+    total_budget_rec, total_actual_rec = draw_monthly_table("Recettes", CATEGORIES['recette'])
+    pdf.ln(5)
+    total_budget_dep, total_actual_dep = draw_monthly_table("Dépenses", CATEGORIES['depense'], is_expense=True)
+    pdf.ln(10)
+
+    pdf.set_font('Helvetica', 'B', 12)
+    pdf.cell(115, 8, "Résultat Budgeté du Mois", align='R')
+    pdf.cell(40, 8, f"{total_budget_rec - total_budget_dep:.2f}", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+    pdf.cell(115, 8, "Résultat Réel du Mois", align='R')
+    pdf.cell(40, 8, f"{total_actual_rec - total_actual_dep:.2f}", 1, new_x=XPos.LMARGIN, new_y=YPos.NEXT, align='R')
+
+    return "Resume_Mensuel.pdf"
+
 
 def generate_pdf(report_type, year_name, **kwargs):
     safe_year_name = year_name.replace('/', '-').replace('\\', '-')
@@ -190,7 +271,17 @@ def generate_pdf(report_type, year_name, **kwargs):
         'poste': lambda: _draw_journal_report(pdf, kwargs.get('data'), year_name, 'poste'),
         'resultat': lambda: _draw_resultat_report(pdf, kwargs.get('data'), year_name),
         'budget': lambda: _draw_budget_report(pdf, kwargs.get('budget_data'), kwargs.get('actual_data'), year_name),
+        ### MODIFIÉ ###
+        'monthly_summary': lambda: _draw_monthly_summary_report(
+            pdf, 
+            kwargs.get('monthly_entries'), 
+            kwargs.get('budget_data'),
+            year_name,
+            kwargs.get('month_name'),
+            kwargs.get('report_year')
+        ),
     }
+    # ... (le reste de la fonction est inchangé)
     if report_type in report_drawers:
         filename = report_drawers[report_type]()
     else:
@@ -208,6 +299,7 @@ def generate_pdf(report_type, year_name, **kwargs):
 
 # --- APPLICATION PRINCIPALE ---
 class App(ctk.CTk):
+    # ... (init et autres fonctions jusqu'à setup_reports_view)
     def __init__(self):
         super().__init__()
         
@@ -260,7 +352,8 @@ class App(ctk.CTk):
         
         # Lance la vérification des mises à jour 2 secondes après le démarrage
         self.after(2000, self.check_for_updates)
-
+    
+    #... (toutes les fonctions intermédiaires jusqu'à setup_reports_view)
     def cleanup_old_version(self):
         """Supprime l'ancienne version du script (_old.py ou _old.exe) si elle existe."""
         try:
@@ -295,9 +388,9 @@ class App(ctk.CTk):
 
                 if remote_version > local_version:
                     if messagebox.askyesno("Mise à jour disponible", 
-                                           f"Une nouvelle version ({remote_version_str}) est disponible.\n"
-                                           f"Votre version actuelle est la {APP_VERSION}.\n\n"
-                                           "Voulez-vous la télécharger et l'installer maintenant ?"):
+                                          f"Une nouvelle version ({remote_version_str}) est disponible.\n"
+                                          f"Votre version actuelle est la {APP_VERSION}.\n\n"
+                                          "Voulez-vous la télécharger et l'installer maintenant ?"):
                         self.apply_update()
         except requests.RequestException as e:
             print(f"Erreur lors de la vérification des mises à jour : {e}")
@@ -354,7 +447,7 @@ class App(ctk.CTk):
             messagebox.showerror("Erreur", f"Une erreur inattendue est survenue : {e}")
 
     def create_sidebar_buttons(self):
-        self.dashboard_button = ctk.CTkButton(self.sidebar_frame, text="Tableau de Bord", command=self.dashboard_frame_event, text_color="green")
+        self.dashboard_button = ctk.CTkButton(self.sidebar_frame, text="Tableau de Bord", command=self.dashboard_frame_event)
         self.dashboard_button.grid(row=1, column=0, padx=20, pady=10)
         self.journal_poste_button = ctk.CTkButton(self.sidebar_frame, text="Journal de Poste", command=self.journal_poste_frame_event)
         self.journal_poste_button.grid(row=2, column=0, padx=20, pady=10)
@@ -416,6 +509,7 @@ class App(ctk.CTk):
         style.configure("Treeview", background="#2b2b2b", foreground="white", fieldbackground="#2b2b2b", borderwidth=0)
         style.map('Treeview', background=[('selected', '#22559b')])
         style.configure("Treeview.Heading", background="#565b5e", foreground="white", font=('Calibri', 10, 'bold'))
+        style.configure("initial.Treeview", background="#333", foreground="cyan")
 
         tree = ttk.Treeview(frame, columns=("ID", "Date", "Libellé", "Catégorie", "Débit", "Crédit", "Solde", "Pièce"), show="headings")
         headings = {"ID": 40, "Date": 100, "Libellé": 250, "Catégorie": 150, "Débit": 100, "Crédit": 100, "Solde": 100, "Pièce": 50}
@@ -426,6 +520,9 @@ class App(ctk.CTk):
         tree.grid(row=1, column=0, sticky="nsew")
         setattr(self, f"{journal_type}_tree", tree)
         tree.bind("<<TreeviewSelect>>", lambda event, jt=journal_type: self.on_journal_select(event, jt))
+        
+        # Configuration du tag pour la ligne de solde initial
+        tree.tag_configure('initial_balance_row', font=('Calibri', 10, 'italic'), foreground='cyan')
 
         totals_frame = ctk.CTkFrame(frame, fg_color="transparent")
         totals_frame.grid(row=2, column=0, sticky="ew", pady=(5,0))
@@ -464,34 +561,59 @@ class App(ctk.CTk):
         ctk.CTkButton(self.reports_frame, text="Générer Journal de Caisse (PDF)", command=lambda: self.generate_report('caisse')).pack(pady=10, padx=20)
         ctk.CTkButton(self.reports_frame, text="Générer Journal de Poste (PDF)", command=lambda: self.generate_report('poste')).pack(pady=10, padx=20)
         ctk.CTkButton(self.reports_frame, text="Générer Compte de Résultat (PDF)", command=lambda: self.generate_report('resultat')).pack(pady=10, padx=20)
-        ctk.CTkButton(self.reports_frame, text="Générer Budget (PDF)", command=lambda: self.generate_report('budget')).pack(pady=10, padx=20)
-
+        ctk.CTkButton(self.reports_frame, text="Générer Rapport de Budget Annuel (PDF)", command=lambda: self.generate_report('budget')).pack(pady=10, padx=20)
+        ### MODIFIÉ ###
+        ctk.CTkButton(self.reports_frame, text="Générer Résumé Budgétaire Mensuel (PDF)", command=self.prompt_for_monthly_report).pack(pady=10, padx=20)
+    
+    # ... (toutes les fonctions jusqu'à generate_report)
     def setup_years_view(self):
         self.years_frame.grid_columnconfigure(0, weight=1)
-        self.years_frame.grid_rowconfigure(1, weight=1)
-        form_frame = ctk.CTkFrame(self.years_frame)
-        form_frame.grid(row=0, column=0, sticky="ew", pady=10)
-        ctk.CTkLabel(form_frame, text="Nom (ex: 2024-2025)").pack(side="left", padx=(10,2))
-        self.year_name_entry = ctk.CTkEntry(form_frame, placeholder_text="Nom de l'exercice")
-        self.year_name_entry.pack(side="left", padx=2, expand=True)
-        ctk.CTkLabel(form_frame, text="Début (YYYY-MM-DD)").pack(side="left", padx=(10,2))
-        self.start_date_entry = ctk.CTkEntry(form_frame, placeholder_text="Date de début")
-        self.start_date_entry.pack(side="left", padx=2, expand=True)
-        ctk.CTkLabel(form_frame, text="Fin (YYYY-MM-DD)").pack(side="left", padx=(10,2))
-        self.end_date_entry = ctk.CTkEntry(form_frame, placeholder_text="Date de fin")
-        self.end_date_entry.pack(side="left", padx=2, expand=True)
-        ctk.CTkButton(form_frame, text="Ajouter Exercice", command=self.add_year).pack(side="left", padx=10)
+        self.years_frame.grid_rowconfigure(2, weight=1) # Changer la row pour le treeview
         
-        # Bouton Supprimer Exercice
-        delete_button = ctk.CTkButton(form_frame, text="Supprimer Exercice", command=self.delete_year, fg_color="#D32F2F", hover_color="#B71C1C")
-        delete_button.pack(side="left", padx=10)
+        form_frame = ctk.CTkFrame(self.years_frame)
+        form_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=10, padx=10)
+        form_frame.grid_columnconfigure(1, weight=1)
+        form_frame.grid_columnconfigure(3, weight=1)
+        form_frame.grid_columnconfigure(5, weight=1)
+        
+        # Ligne 1: Nom, Début, Fin
+        ctk.CTkLabel(form_frame, text="Nom (ex: 2024-2025)").grid(row=0, column=0, padx=(10,2), pady=5, sticky="w")
+        self.year_name_entry = ctk.CTkEntry(form_frame, placeholder_text="Nom de l'exercice")
+        self.year_name_entry.grid(row=0, column=1, padx=2, pady=5, sticky="ew")
+        
+        ctk.CTkLabel(form_frame, text="Début (YYYY-MM-DD)").grid(row=0, column=2, padx=(10,2), pady=5, sticky="w")
+        self.start_date_entry = ctk.CTkEntry(form_frame, placeholder_text="Date de début")
+        self.start_date_entry.grid(row=0, column=3, padx=2, pady=5, sticky="ew")
+        
+        ctk.CTkLabel(form_frame, text="Fin (YYYY-MM-DD)").grid(row=0, column=4, padx=(10,2), pady=5, sticky="w")
+        self.end_date_entry = ctk.CTkEntry(form_frame, placeholder_text="Date de fin")
+        self.end_date_entry.grid(row=0, column=5, padx=2, pady=5, sticky="ew")
+        
+        # Ligne 2: Soldes Initiaux
+        ctk.CTkLabel(form_frame, text="Solde Initial Poste").grid(row=1, column=0, padx=(10,2), pady=5, sticky="w")
+        self.initial_poste_entry = ctk.CTkEntry(form_frame, placeholder_text="0.00")
+        self.initial_poste_entry.grid(row=1, column=1, padx=2, pady=5, sticky="ew")
+        
+        ctk.CTkLabel(form_frame, text="Solde Initial Caisse").grid(row=1, column=2, padx=(10,2), pady=5, sticky="w")
+        self.initial_caisse_entry = ctk.CTkEntry(form_frame, placeholder_text="0.00")
+        self.initial_caisse_entry.grid(row=1, column=3, padx=2, pady=5, sticky="ew")
 
-        self.years_tree = ttk.Treeview(self.years_frame, columns=("ID", "Nom", "Début", "Fin"), show="headings")
+        # Boutons
+        button_frame = ctk.CTkFrame(self.years_frame, fg_color="transparent")
+        button_frame.grid(row=1, column=0, columnspan=2, sticky="e", pady=5, padx=10)
+        ctk.CTkButton(button_frame, text="Ajouter Exercice", command=self.add_year).pack(side="left", padx=5)
+        delete_button = ctk.CTkButton(button_frame, text="Supprimer Exercice", command=self.delete_year, fg_color="#D32F2F", hover_color="#B71C1C")
+        delete_button.pack(side="left", padx=5)
+
+        # Treeview
+        self.years_tree = ttk.Treeview(self.years_frame, columns=("ID", "Nom", "Début", "Fin", "Solde Poste", "Solde Caisse"), show="headings")
         self.years_tree.heading("ID", text="ID"); self.years_tree.column("ID", width=50)
         self.years_tree.heading("Nom", text="Nom"); self.years_tree.column("Nom", width=200)
-        self.years_tree.heading("Début", text="Date de début"); self.years_tree.column("Début", width=150)
-        self.years_tree.heading("Fin", text="Date de fin"); self.years_tree.column("Fin", width=150)
-        self.years_tree.grid(row=1, column=0, sticky="nsew")
+        self.years_tree.heading("Début", text="Date de début"); self.years_tree.column("Début", width=120)
+        self.years_tree.heading("Fin", text="Date de fin"); self.years_tree.column("Fin", width=120)
+        self.years_tree.heading("Solde Poste", text="Solde Init. Poste"); self.years_tree.column("Solde Poste", width=120, anchor="e")
+        self.years_tree.heading("Solde Caisse", text="Solde Init. Caisse"); self.years_tree.column("Solde Caisse", width=120, anchor="e")
+        self.years_tree.grid(row=2, column=0, sticky="nsew", padx=10, pady=10)
         self.refresh_years_view()
 
     def setup_budget_view(self):
@@ -500,10 +622,10 @@ class App(ctk.CTk):
 
         self.tabview = ctk.CTkTabview(self.budget_frame)
         self.tabview.grid(row=0, column=0, sticky="nsew")
-        self.tabview.add("Créer / Modifier le Budget")
-        self.tabview.add("Suivi du Budget")
+        self.tabview.add("Créer / Modifier le Budget Annuel")
+        self.tabview.add("Suivi du Budget Annuel")
 
-        self.budget_edit_frame = ctk.CTkScrollableFrame(self.tabview.tab("Créer / Modifier le Budget"))
+        self.budget_edit_frame = ctk.CTkScrollableFrame(self.tabview.tab("Créer / Modifier le Budget Annuel"))
         self.budget_edit_frame.pack(expand=True, fill="both")
 
         self.budget_entries = {}
@@ -531,17 +653,23 @@ class App(ctk.CTk):
         save_button = ctk.CTkButton(self.budget_edit_frame, text="Sauvegarder le Budget", command=self.save_budget)
         save_button.grid(row=row, column=0, columnspan=2, pady=20)
 
-        self.budget_view_frame = ctk.CTkFrame(self.tabview.tab("Suivi du Budget"))
+        self.budget_view_frame = ctk.CTkFrame(self.tabview.tab("Suivi du Budget Annuel"))
         self.budget_view_frame.pack(expand=True, fill="both")
 
     def update_year_selector(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, name, start_date, end_date FROM accounting_years ORDER BY start_date DESC")
+        cursor.execute("SELECT * FROM accounting_years ORDER BY start_date DESC")
         years = cursor.fetchall()
         self.accounting_years.clear()
         year_names = []
         for year in years:
-            self.accounting_years[year['name']] = {'id': year['id'], 'start': year['start_date'], 'end': year['end_date']}
+            self.accounting_years[year['name']] = {
+                'id': year['id'], 
+                'start': year['start_date'], 
+                'end': year['end_date'],
+                'initial_poste': year['initial_balance_poste'],
+                'initial_caisse': year['initial_balance_caisse']
+            }
             year_names.append(year['name'])
         if not year_names:
             year_names = ["Créez un exercice d'abord"]
@@ -600,7 +728,7 @@ class App(ctk.CTk):
     def get_entries_for_selected_year(self):
         if not self.current_year_id: return []
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM entries WHERE year_id = ? ORDER BY date DESC", (self.current_year_id,))
+        cursor.execute("SELECT * FROM entries WHERE year_id = ? ORDER BY date ASC, id ASC", (self.current_year_id,))
         return cursor.fetchall()
 
     def get_entry_by_id(self, entry_id):
@@ -609,12 +737,31 @@ class App(ctk.CTk):
         return cursor.fetchone()
 
     def update_dashboard(self):
+        if not self.current_year_id:
+            # Reset labels if no year is selected
+            self.solde_poste_label.configure(text="0.00 CHF")
+            self.solde_caisse_label.configure(text="0.00 CHF")
+            self.total_recettes_label.configure(text="0.00 CHF")
+            self.total_depenses_label.configure(text="0.00 CHF")
+            self.benefice_label.configure(text="0.00 CHF")
+            return
+
+        # Récupérer les soldes initiaux
+        year_info = self.accounting_years.get(self.year_selector_var.get())
+        initial_poste = year_info.get('initial_poste', 0.0) if year_info else 0.0
+        initial_caisse = year_info.get('initial_caisse', 0.0) if year_info else 0.0
+
         entries = self.get_entries_for_selected_year()
-        solde_poste = sum(e['amount'] for e in entries if e['journal'] == 'poste')
-        solde_caisse = sum(e['amount'] for e in entries if e['journal'] == 'caisse')
+        
+        # Le solde final est le solde initial + la somme des mouvements de l'exercice
+        solde_poste = initial_poste + sum(e['amount'] for e in entries if e['journal'] == 'poste')
+        solde_caisse = initial_caisse + sum(e['amount'] for e in entries if e['journal'] == 'caisse')
+        
+        # Le résultat (bénéfice/perte) ne concerne que les mouvements de l'exercice
         total_recettes = sum(e['amount'] for e in entries if e['type'] == 'recette')
         total_depenses = sum(abs(e['amount']) for e in entries if e['type'] == 'depense')
         benefice = total_recettes - total_depenses
+
         self.solde_poste_label.configure(text=f"{solde_poste:.2f} CHF")
         self.solde_caisse_label.configure(text=f"{solde_caisse:.2f} CHF")
         self.total_recettes_label.configure(text=f"{total_recettes:.2f} CHF")
@@ -636,11 +783,24 @@ class App(ctk.CTk):
             solde_final_label.configure(text="Solde Final: 0.00")
             return
 
+        # Récupérer le solde initial
+        year_info = self.accounting_years.get(self.year_selector_var.get())
+        initial_balance = 0.0
+        if year_info:
+            initial_balance = year_info['initial_poste'] if journal_type == 'poste' else year_info['initial_caisse']
+
+        solde = initial_balance
+        
+        # Ajouter la ligne de solde initial
+        tree.insert("", 0, iid='initial_balance', values=(
+            "", "", "Report à nouveau", "", "", "", f"{initial_balance:.2f}", ""
+        ), tags=('initial_balance_row',))
+        
+        # Récupérer les écritures
         cursor = self.conn.cursor()
         cursor.execute("SELECT * FROM entries WHERE journal = ? AND year_id = ? ORDER BY date ASC, id ASC", (journal_type, self.current_year_id))
         entries = cursor.fetchall()
 
-        solde = 0
         total_debit = 0
         total_credit = 0
         for entry in entries:
@@ -660,6 +820,7 @@ class App(ctk.CTk):
 
             tree.insert("", "end", values=(entry['id'], datetime.strptime(entry['date'], '%Y-%m-%d').strftime('%d/%m/%Y'), entry['libelle'], entry['category'], debit, credit, f"{solde:.2f}", attachment_indicator))
 
+        # Les totaux débit/crédit ne concernent que les mouvements de l'exercice
         total_debit_label.configure(text=f"Total Débit: {total_debit:.2f}")
         total_credit_label.configure(text=f"Total Crédit: {total_credit:.2f}")
         solde_final_label.configure(text=f"Solde Final: {solde:.2f}")
@@ -670,7 +831,7 @@ class App(ctk.CTk):
         view_button.configure(state="disabled")
         edit_button.configure(state="disabled")
         delete_button.configure(state="disabled")
-
+    
     def on_journal_select(self, event, journal_type):
         tree = getattr(self, f"{journal_type}_tree")
         view_button = getattr(self, f"{journal_type}_view_attachment_button")
@@ -678,7 +839,9 @@ class App(ctk.CTk):
         delete_button = getattr(self, f"{journal_type}_delete_button")
 
         selected_items = tree.selection()
-        if not selected_items:
+        
+        # Désactiver les boutons si la ligne de report est sélectionnée
+        if not selected_items or 'initial_balance' in tree.selection()[0]:
             view_button.configure(state="disabled")
             edit_button.configure(state="disabled")
             delete_button.configure(state="disabled")
@@ -950,13 +1113,21 @@ class App(ctk.CTk):
                 ctk.CTkLabel(details_win, text=f"Total: {total:.2f} CHF", font=ctk.CTkFont(weight="bold")).pack(pady=10)
             else:
                 messagebox.showinfo("Information", "Aucun détail pour cette écriture.")
-
     def add_year(self):
         name = self.year_name_entry.get()
         start = self.start_date_entry.get()
         end = self.end_date_entry.get()
+        
+        # Récupérer et valider les soldes initiaux
+        try:
+            initial_poste = float(self.initial_poste_entry.get() or 0.0)
+            initial_caisse = float(self.initial_caisse_entry.get() or 0.0)
+        except ValueError:
+            messagebox.showerror("Erreur", "Les soldes initiaux doivent être des nombres.")
+            return
+
         if not all([name, start, end]):
-            messagebox.showerror("Erreur", "Tous les champs sont requis.")
+            messagebox.showerror("Erreur", "Le nom et les dates de début/fin sont requis.")
             return
         try:
             datetime.strptime(start, '%Y-%m-%d'); datetime.strptime(end, '%Y-%m-%d')
@@ -965,11 +1136,16 @@ class App(ctk.CTk):
             return
         try:
             cursor = self.conn.cursor()
-            cursor.execute("INSERT INTO accounting_years (name, start_date, end_date) VALUES (?, ?, ?)", (name, start, end))
+            cursor.execute("""
+                INSERT INTO accounting_years (name, start_date, end_date, initial_balance_poste, initial_balance_caisse) 
+                VALUES (?, ?, ?, ?, ?)
+            """, (name, start, end, initial_poste, initial_caisse))
             self.conn.commit()
             self.refresh_years_view()
             self.update_year_selector()
+            # Vider les champs
             self.year_name_entry.delete(0, 'end'); self.start_date_entry.delete(0, 'end'); self.end_date_entry.delete(0, 'end')
+            self.initial_poste_entry.delete(0, 'end'); self.initial_caisse_entry.delete(0, 'end')
         except sqlite3.IntegrityError:
             messagebox.showerror("Erreur", "Un exercice avec ce nom existe déjà.")
 
@@ -983,8 +1159,8 @@ class App(ctk.CTk):
         year_name = selected_item['values'][1]
 
         if not messagebox.askyesno("Confirmation de suppression", 
-                                   f"Êtes-vous sûr de vouloir supprimer l'exercice '{year_name}' ?\n"
-                                   "ATTENTION : Toutes les écritures, budgets et pièces jointes associés seront définitivement supprimés."):
+                                  f"Êtes-vous sûr de vouloir supprimer l'exercice '{year_name}' ?\n"
+                                  "ATTENTION : Toutes les écritures, budgets et pièces jointes associés seront définitivement supprimés."):
             return
 
         try:
@@ -1020,13 +1196,19 @@ class App(ctk.CTk):
             self.conn.rollback()
             messagebox.showerror("Erreur de suppression", f"Une erreur est survenue : {e}")
 
-
     def refresh_years_view(self):
         for item in self.years_tree.get_children(): self.years_tree.delete(item)
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, name, start_date, end_date FROM accounting_years ORDER BY start_date DESC")
+        cursor.execute("SELECT * FROM accounting_years ORDER BY start_date DESC")
         for row in cursor.fetchall():
-            self.years_tree.insert("", "end", values=(row['id'], row['name'], row['start_date'], row['end_date']))
+            self.years_tree.insert("", "end", values=(
+                row['id'], 
+                row['name'], 
+                row['start_date'], 
+                row['end_date'],
+                f"{row['initial_balance_poste']:.2f}",
+                f"{row['initial_balance_caisse']:.2f}"
+            ))
 
     def save_budget(self):
         if not self.current_year_id:
@@ -1133,7 +1315,8 @@ class App(ctk.CTk):
         ctk.CTkLabel(result_frame, text=f"Budgeté: {benefice_budget:.2f} CHF", font=header_font).grid(row=0, column=1, sticky="e", padx=20)
         ctk.CTkLabel(result_frame, text=f"Réel: {benefice_actual:.2f} CHF", font=header_font).grid(row=0, column=2, sticky="e", padx=20)
 
-    def generate_report(self, report_type):
+    ### MODIFIÉ ###
+    def generate_report(self, report_type, **kwargs):
         if not self.current_year_id:
             messagebox.showerror("Erreur", "Veuillez sélectionner un exercice.")
             return
@@ -1149,8 +1332,84 @@ class App(ctk.CTk):
             report_kwargs['budget_data'] = {row['category']: row['amount'] for row in cursor.fetchall()}
             cursor.execute("SELECT category, SUM(amount) FROM entries WHERE year_id = ? GROUP BY category", (self.current_year_id,))
             report_kwargs['actual_data'] = {row['category']: row[1] for row in cursor.fetchall()}
+        elif report_type == 'monthly_summary':
+            selected_date = kwargs.get('selected_date')
+            if not selected_date:
+                messagebox.showerror("Erreur", "Aucun mois n'a été sélectionné pour le rapport.")
+                return
+
+            start_of_month = selected_date.replace(day=1)
+            end_of_month = selected_date.replace(day=calendar.monthrange(selected_date.year, selected_date.month)[1])
+            
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT * FROM entries WHERE year_id = ? AND date BETWEEN ? AND ?", 
+                           (self.current_year_id, start_of_month.strftime('%Y-%m-%d'), end_of_month.strftime('%Y-%m-%d')))
+            report_kwargs['monthly_entries'] = cursor.fetchall()
+            
+            cursor.execute("SELECT category, amount FROM budgets WHERE year_id = ?", (self.current_year_id,))
+            report_kwargs['budget_data'] = {row['category']: row['amount'] for row in cursor.fetchall()}
+            
+            report_kwargs['month_name'] = selected_date.strftime("%B")
+            report_kwargs['report_year'] = selected_date.year
 
         generate_pdf(report_type=report_type, year_name=year_name, **report_kwargs)
+    
+    ### NOUVEAU ###
+    def prompt_for_monthly_report(self):
+        """Ouvre une fenêtre pour demander à l'utilisateur de choisir un mois."""
+        if not self.current_year_id:
+            messagebox.showerror("Erreur", "Veuillez d'abord sélectionner un exercice.")
+            return
+
+        year_info = self.accounting_years.get(self.year_selector_var.get())
+        if not year_info:
+            return
+
+        start_date = datetime.strptime(year_info['start'], '%Y-%m-%d').date()
+        end_date = datetime.strptime(year_info['end'], '%Y-%m-%d').date()
+
+        # Générer la liste des mois pour l'exercice
+        months = []
+        # Dictionnaire pour mapper le nom du mois à un objet date (le 1er du mois)
+        month_map = {}
+        
+        current_month = start_date.replace(day=1)
+        while current_month <= end_date:
+            month_str = current_month.strftime("%B %Y").capitalize()
+            months.append(month_str)
+            month_map[month_str] = current_month
+            # Passer au mois suivant
+            next_month = current_month.month + 1
+            next_year = current_month.year
+            if next_month > 12:
+                next_month = 1
+                next_year += 1
+            current_month = current_month.replace(year=next_year, month=next_month)
+
+        if not months:
+            messagebox.showinfo("Information", "Aucun mois complet dans cet exercice.")
+            return
+
+        # Créer la fenêtre de dialogue
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Choisir un mois")
+        dialog.geometry("300x150")
+        dialog.transient(self)
+        dialog.grab_set()
+
+        ctk.CTkLabel(dialog, text="Sélectionnez le mois pour le rapport :").pack(pady=10)
+
+        month_var = ctk.StringVar(value=months[-1]) # Proposer le mois le plus récent par défaut
+        month_menu = ctk.CTkOptionMenu(dialog, variable=month_var, values=months)
+        month_menu.pack(pady=5, padx=20, fill="x")
+
+        def on_generate():
+            selected_month_str = month_var.get()
+            selected_date = month_map[selected_month_str]
+            dialog.destroy()
+            self.generate_report('monthly_summary', selected_date=selected_date)
+
+        ctk.CTkButton(dialog, text="Générer", command=on_generate).pack(pady=10)
 
     def backup_database(self):
         try:
@@ -1186,11 +1445,19 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Erreur de restauration", f"Une erreur est survenue: {e}")
             self.conn = db_connect()
-
+    
 if __name__ == "__main__":
+    # Définir la locale pour avoir les noms de mois en français
+    try:
+        # Tenter la locale Windows, puis Linux/macOS
+        locale.setlocale(locale.LC_TIME, 'French_France.1252')
+    except locale.Error:
+        try:
+            locale.setlocale(locale.LC_TIME, 'fr_FR.UTF-8')
+        except locale.Error:
+            print("Locale 'fr_FR' non trouvée, utilisation de la locale système.")
+    
     ctk.set_appearance_mode("System")
     ctk.set_default_color_theme("blue")
     app = App()
     app.mainloop()
-
-# Bon ca fonctionne 
